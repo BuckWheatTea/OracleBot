@@ -8,6 +8,7 @@ from typing import Union
 from math import sqrt
 from sc2.units import Units, Unit
 
+
 def get_pylon_pos_in_bitownhall(map_center, townhall_location, interval):
     dirt = (
         map_center.x - townhall_location.x,
@@ -47,7 +48,7 @@ def get_pylon_pos_by_initial(p: tuple):
 # def get_direction(tail: Point2, head: Point2):
 
 
-class SneakStragy(BotAI):
+class OracleBot(BotAI):
 
     def __init__(self):
         super().__init__()
@@ -71,6 +72,9 @@ class SneakStragy(BotAI):
         self.all_force_attack = False
         self.have_resource_exhausted = False
 
+        self.attack_leader = None # Unit
+
+        self.gather_range = 5
 
 
     async def on_step(self, iteration: int):
@@ -85,16 +89,20 @@ class SneakStragy(BotAI):
         await self.train_oracle()
 
         await self.upgrade_charge()
+        await self.upgrade_blink()
+        await self.upgrade_resonating_glaives()
+        await self.upgrade_forge()
+
         await self.build_assimilators()
         await self.build_gateway_warpgate()
         await self.upgrade_warpgate()
-        # await self.train_force_in_gate()
-
+        await self.train_force_in_gate()
 
         await self.expand()
         await self.build_roboticsfacility()
         await self.sneak_attack_oracle()
-        await self.output_information()
+        await self.attack_oracle()
+
         await self.distribute_chronoboost()
         await self.gather_froces()
         await self.build_forge()
@@ -109,6 +117,9 @@ class SneakStragy(BotAI):
 
         # self.get_scout()
         self.deal_with_information()
+
+        await self.output_information_async()
+        self.output_information_normal()
 
     def get_scout(self):
         if self.scout_oracle is None and self.units(UnitTypeId.ORACLE).ready.exists:
@@ -127,17 +138,31 @@ class SneakStragy(BotAI):
 
         # about gather point
         if self.units(UnitTypeId.PYLON).exists:
-            self.gather_point = self.units(UnitTypeId.PYLON).furthest_to(self.start_location).position.to2
+            self.gather_point = self.units(UnitTypeId.PYLON).closest_to(self.enemy_start_locations[0]).position.to2
             map_center = self.game_info.map_center
             direction = self.gather_point.direction_vector(map_center) * 3
             self.gather_point = self.gather_point + direction
 
         # about attack
-        if self.units.of_type({UnitTypeId.STALKER, UnitTypeId.ZEALOT}).ready.exists:
-            if self.units.of_type({UnitTypeId.STALKER, UnitTypeId.ZEALOT}).ready.closer_than(10, self.gather_point).amount > 15:
+        if self.units.of_type({UnitTypeId.STALKER, UnitTypeId.ZEALOT, UnitTypeId.ADEPT}).ready.exists:
+            if self.units(UnitTypeId.IMMORTAL).ready.exists and \
+                self.units.of_type({UnitTypeId.STALKER, UnitTypeId.ZEALOT, UnitTypeId.ADEPT}).ready.closer_than(10, self.gather_point).amount > 10:
                 self.gather_in_home = False
                 self.all_force_attack = True
 
+        # about attack leader
+        if self.all_force_attack == True:
+            if self.units(UnitTypeId.IMMORTAL).ready.exists:
+                self.attack_leader = self.units(UnitTypeId.IMMORTAL).ready.closest_to(self.enemy_start_locations[0])
+
+            # if self.attack_leader is None or self.attack_leader not in self.units:
+            #     self.attack_leader = self.units(UnitTypeId.IMMORTAL).ready.first
+            # elif self.attack_leader is not None and self.attack_leader not in self.units and self.units(UnitTypeId.IMMORTAL).ready.amount == 0:
+            #     if self.units.filter(lambda u:u.is_attacking).exists:
+            #         self.attack_leader = self.units.filter(lambda u:u.is_attacking).random
+            #     else:
+            #         self.all_force_attack = False
+            #         self.gather_in_home = True
 
         # about defensive
         self.defend_home = not self.enemy_appeared_near_townhall()
@@ -157,8 +182,12 @@ class SneakStragy(BotAI):
     def investigate(self):
         pass
 
-    async def output_information(self):
+    async def output_information_async(self):
         pass
+
+    def output_information_normal(self):
+        if self.attack_leader is not None:
+            print("leader = ", self.attack_leader, "position=", self.attack_leader.position)
 
     async def chronoboost(self, target):
         for townhall in self.townhalls:
@@ -280,22 +309,55 @@ class SneakStragy(BotAI):
     async def train_force_in_gate(self):
         if self.townhalls.ready.amount == 1:
             if self.units(UnitTypeId.GATEWAY).ready.exists and not self.units(UnitTypeId.CYBERNETICSCORE).ready.exists:
-                if self.units(UnitTypeId.ZEALOT).ready.amount < 3:
+                if self.units(UnitTypeId.ZEALOT).ready.amount < 1:
                     await self.train_zealot()
             elif self.units(UnitTypeId.GATEWAY).ready.exists and self.units(UnitTypeId.CYBERNETICSCORE).ready.exists:
-                if self.units(UnitTypeId.STALKER).ready.amount < 2:
+                if self.units(UnitTypeId.ADEPT).ready.amount < 2:
+                    await self.train_adept()
+                if self.units(UnitTypeId.STALKER).ready.amount < 1:
                     await self.train_stalker()
-            elif self.units(UnitTypeId.WARPGATE).ready.exists and self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.STALKER}).amount < 5:
-                if self.units(UnitTypeId.STALKER).amount < self.units(UnitTypeId.ZEALOT).amount:
+            elif self.units(UnitTypeId.WARPGATE).ready.exists and \
+                    self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.STALKER, UnitTypeId.ADEPT}).amount < 5:
+                if self.units(UnitTypeId.ADEPT).amount < self.units(UnitTypeId.ZEALOT).amount:
                     await self.train_stalker()
                 else:
                     await self.train_zealot()
-        elif self.townhalls.ready.amount == 2:
-            if self.units(UnitTypeId.STALKER).amount < 6:
-                await self.train_stalker()
-            if self.units(UnitTypeId.ZEALOT).amount < 6:
+        elif self.townhalls.ready.amount >= 2:
+            if self.units(UnitTypeId.STALKER).amount < self.known_enemy_units.of_type({UnitTypeId.ZERGLING}).amount / 3:
+                await self.train_adept()
+            if self.units(UnitTypeId.ZEALOT).amount < self.known_enemy_units.of_type({UnitTypeId.ROACH, UnitTypeId.RAVAGER}).amount:
                 await self.train_zealot()
+            if self.units(UnitTypeId.STALKER).amount < self.known_enemy_units.filter(lambda u:u.is_flying).amount:
+                await self.train_stalker()
+            if self.units(UnitTypeId.STALKER).amount >= self.known_enemy_units.of_type({UnitTypeId.ZERGLING}).amount / 3 and \
+                self.units(UnitTypeId.ZEALOT).amount >= self.known_enemy_units.of_type({UnitTypeId.ROACH, UnitTypeId.RAVAGER}).amount and \
+                self.units(UnitTypeId.STALKER).amount >= self.known_enemy_units.filter(lambda u:u.is_flying).amount and \
+                self.units(UnitTypeId.IMMORTAL).amount >= 3:
 
+                if self.units(UnitTypeId.ZEALOT).amount <= self.units(UnitTypeId.STALKER).amount*2:
+                    await self.train_zealot()
+                elif self.units(UnitTypeId.ADEPT).amount <= self.units(UnitTypeId.ZEALOT).amount:
+                    await self.train_adept()
+                else:
+                    await self.train_stalker()
+
+    async def train_adept(self):
+        if not self.units(UnitTypeId.WARPGATE).ready.exists and \
+                self.units(UnitTypeId.GATEWAY).ready.exists and \
+                self.units(UnitTypeId.CYBERNETICSCORE).ready.exists:
+            for gateway in self.units(UnitTypeId.GATEWAY).ready:
+                if self.can_afford(UnitTypeId.ADEPT) and gateway.is_idle:
+                    await self.do(gateway.train(UnitTypeId.ADEPT))
+        elif self.units(UnitTypeId.WARPGATE).ready.exists and self.units(UnitTypeId.CYBERNETICSCORE).ready.exists:
+            # proxy = self.units(UnitTypeId.PYLON).ready.random.position.to2
+            proxy = self.units(UnitTypeId.WARPGATE).ready.furthest_to(self.start_location).position.to2
+            if self.can_afford(UnitTypeId.ADEPT):
+                for warpgate in self.units(UnitTypeId.WARPGATE).ready:
+                    abilities = await self.get_available_abilities(warpgate)
+                    if AbilityId.WARPGATETRAIN_ZEALOT in abilities:
+                        pos = proxy.random_on_distance(4)
+                        placement = await self.find_placement(UnitTypeId.PYLON, pos)
+                        if placement is not None: await self.do(warpgate.warp_in(UnitTypeId.ADEPT, pos))
 
     async def train_zealot(self):
         if not self.units(UnitTypeId.WARPGATE).ready.exists and \
@@ -334,13 +396,10 @@ class SneakStragy(BotAI):
 
     async def gather_froces(self):
         if self.gather_in_home or not self.defend_home:
-            for zealot in self.units(UnitTypeId.ZEALOT).ready.idle:
-                if zealot.distance_to(self.gather_point) > 8:
-                    await self.do(zealot.move(self.gather_point))
+            for unit in self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.ADEPT, UnitTypeId.STALKER, UnitTypeId.IMMORTAL}).ready.idle:
+                if unit.distance_to(self.gather_point) > self.gather_range:
+                    await self.do(unit.move(self.gather_point))
 
-            for stalker in self.units(UnitTypeId.STALKER).ready.idle:
-                if stalker.distance_to(self.gather_point) > 8:
-                    await self.do(stalker.move(self.gather_point))
 
     async def build_stargate(self):
         if self.units(UnitTypeId.CYBERNETICSCORE).ready.exists:
@@ -352,7 +411,7 @@ class SneakStragy(BotAI):
     async def train_oracle(self):
         if self.units(UnitTypeId.STARGATE).ready.exists:
             if self.can_afford(UnitTypeId.ORACLE):
-                if self.units(UnitTypeId.ORACLE).amount < 2:
+                if self.units(UnitTypeId.ORACLE).amount < 3:
                     for stargate in self.units(UnitTypeId.STARGATE):
                         if stargate.is_idle:
                             await self.do(stargate.train(UnitTypeId.ORACLE))
@@ -364,6 +423,7 @@ class SneakStragy(BotAI):
                     self.known_enemy_structures({UnitTypeId.SPORECRAWLER}).closer_than(6, worker).amount < 1:
                 return worker
         return None
+
 
     async def oracle_attck_target(self, oracle:Unit, target: Unit):
         if AbilityId.BEHAVIOR_PULSARBEAMON in await self.get_available_abilities(oracle):
@@ -378,12 +438,11 @@ class SneakStragy(BotAI):
     async def oracle_flee(self, oracle:Unit):
         if AbilityId.BEHAVIOR_PULSARBEAMOFF in await self.get_available_abilities(oracle):
             await self.do(oracle(AbilityId.BEHAVIOR_PULSARBEAMOFF))
-        await self.do(oracle.move(self.start_location))
+        await self.oracle_move_with_dodge(oracle, self.start_location)
 
     async def sneak_attack_oracle(self):
-        for oracle in self.units(UnitTypeId.ORACLE).ready:
-
-            if oracle.health + oracle.shield < 0.25*(oracle.health_max + 60):  # if hp is low
+        for oracle in self.units(UnitTypeId.ORACLE).ready.filter(lambda u:u.health >= 15):
+            if oracle.health + oracle.shield < 0.4*(oracle.health_max + 60):  # if hp is low
                 if self.known_enemy_units.closer_than(15, oracle).exists:                # if enemies nearby
                     if self.known_enemy_units.of_type(self.can_attack_oracle_units).closer_than(12, oracle).exists or \
                             self.known_enemy_structures.of_type({UnitTypeId.SPORECRAWLER}).exists: # if enemies can attack you
@@ -392,7 +451,7 @@ class SneakStragy(BotAI):
                         await self.do(oracle.hold_position())
                 else:
                     await self.do(oracle.hold_position())
-            elif oracle.health + oracle.shield > 0.42*(oracle.health_max + 60):  # if hp is high
+            elif oracle.health + oracle.shield > 0.6*(oracle.health_max + 60):  # if hp is high
                 if oracle.energy < 5 : # oracle has no enough energy
                     if self.known_enemy_units.of_type(self.can_attack_oracle_units).closer_than(12, oracle).exists or \
                             self.known_enemy_structures.of_type({UnitTypeId.SPORECRAWLER}).exists: # if enemies can attack you
@@ -402,14 +461,15 @@ class SneakStragy(BotAI):
                 else:  # oracle has enough energy
                     if oracle.energy > 35:
                         if self.known_enemy_units.closer_than(12, oracle).exists: # if enemies nearby
-                            if self.known_enemy_units.closer_than(16, oracle).of_type({UnitTypeId.DRONE}).exists: # enemies have workers
+                            if self.known_enemy_units.closer_than(8, oracle).of_type({UnitTypeId.DRONE}).exists: # enemies have workers
                                 if self.target_of_oracle is None:
-                                    self.target_of_oracle = self.oracle_select_enemy_worker_as_target(self.known_enemy_units.closer_than(16, oracle).of_type({UnitTypeId.DRONE}))
+                                    self.target_of_oracle = self.oracle_select_enemy_worker_as_target(self.known_enemy_units.closer_than(4, oracle).of_type({UnitTypeId.DRONE}))
                                 if self.target_of_oracle is None:
                                     if self.oracle_next_loction == None or oracle.distance_to(self.oracle_next_loction) < 5:
                                         self.oracle_next_loction = self.oracle_get_enemy_next_base(oracle)
                                     if self.oracle_next_loction is not None:
-                                        await self.do(oracle.move(self.oracle_next_loction))
+                                        # await self.do(oracle.move(self.oracle_next_loction))
+                                        await self.oracle_move_with_dodge(oracle, self.oracle_next_loction)
                                 else:
                                     await self.oracle_attck_target(oracle, self.target_of_oracle)
                             else:
@@ -419,22 +479,25 @@ class SneakStragy(BotAI):
                                     if self.oracle_next_loction == None or oracle.distance_to(self.oracle_next_loction) < 5:
                                         self.oracle_next_loction = self.oracle_get_enemy_next_base(oracle)
                                     if self.oracle_next_loction is not None:
-                                        await self.do(oracle.move(self.oracle_next_loction))
+                                        # await self.do(oracle.move(self.oracle_next_loction))
+                                        await self.oracle_move_with_dodge(oracle, self.oracle_next_loction)
                         else:
                             if self.oracle_next_loction == None or oracle.distance_to(self.oracle_next_loction) < 5:
                                 self.oracle_next_loction = self.oracle_get_enemy_next_base(oracle)
                             if self.oracle_next_loction is not None:
-                                await self.do(oracle.move(self.oracle_next_loction))
+                                # await self.do(oracle.move(self.oracle_next_loction))
+                                await self.oracle_move_with_dodge(oracle, self.oracle_next_loction)
                     else:
                         if AbilityId.BEHAVIOR_PULSARBEAMOFF in await self.get_available_abilities(oracle):
                             if self.known_enemy_units.closer_than(20, oracle).exists:
                                 if self.target_of_oracle is None:
-                                    self.target_of_oracle = self.oracle_select_enemy_worker_as_target(self.known_enemy_units.closer_than(16, oracle).of_type({UnitTypeId.DRONE}))
+                                    self.target_of_oracle = self.oracle_select_enemy_worker_as_target(self.known_enemy_units.closer_than(4, oracle).of_type({UnitTypeId.DRONE}))
                                 if self.target_of_oracle is None:
                                     if self.oracle_next_loction == None or oracle.distance_to(self.oracle_next_loction) < 5:
                                         self.oracle_next_loction = self.oracle_get_enemy_next_base(oracle)
                                     if self.oracle_next_loction is not None:
-                                        await self.do(oracle.move(self.oracle_next_loction))
+                                        # await self.do(oracle.move(self.oracle_next_loction))
+                                        await self.oracle_move_with_dodge(oracle, self.oracle_next_loction)
                                 else:
                                     await self.oracle_attck_target(oracle, self.target_of_oracle)
                             else:
@@ -453,7 +516,8 @@ class SneakStragy(BotAI):
                         if self.oracle_next_loction == None or oracle.distance_to(self.oracle_next_loction) < 5:
                             self.oracle_next_loction = self.oracle_get_enemy_next_base(oracle)
                         if self.oracle_next_loction is not None:
-                            await self.do(oracle.move(self.oracle_next_loction))
+                            # await self.do(oracle.move(self.oracle_next_loction))
+                            await self.oracle_move_with_dodge(oracle, self.oracle_next_loction)
                     else:
                         await self.oracle_attck_target(oracle, self.target_of_oracle)
                 else:
@@ -461,6 +525,51 @@ class SneakStragy(BotAI):
                         await self.oracle_flee(oracle)
                     else:
                         await self.do(oracle.hold_position())
+
+    async def oracle_move_with_dodge(self, oracle:Unit, dest:Union[Point2, Unit], bias: Union[int, float] = 6):
+        can_attack_oracle =  self.known_enemy_units.closer_than(15, oracle).filter(lambda u: u.can_attack_air)
+
+        if len(can_attack_oracle) > 0:
+
+            re_vectors = []
+            for enemy in can_attack_oracle:
+                if oracle.distance_to(enemy) <= enemy.air_range + 4:
+                    this_vector = oracle.position - enemy.position
+                    this_vector = this_vector / abs(this_vector)
+                    re_vectors.append(this_vector)
+
+            if len(re_vectors) > 0:
+                combined_re_vector = Point2((0,0))
+                for vector in re_vectors:
+                    combined_re_vector += vector
+
+                combined_re_vector = combined_re_vector / abs(combined_re_vector)
+
+                destination = Point2((0,0))
+                if isinstance(dest, Unit): destination = dest.position
+                elif isinstance(dest, Point2):destination = dest
+                forward_vector = destination - oracle.position
+                forward_vector = forward_vector / abs(forward_vector)
+
+                combined_vector = combined_re_vector + forward_vector
+
+                if combined_vector.is_same_as(Point2((0,0)), dist = 0.01):
+                    if forward_vector.x < 0.02:
+                        combined_vector = Point2((1, 0))
+                    else:
+                        combined_vector = Point2((1, -(forward_vector.y / forward_vector.x)))
+
+                combined_vector = combined_vector / abs(combined_vector)
+
+                mid_point = oracle.position + combined_vector * bias
+                await self.do(oracle.move(mid_point))
+            else:
+                if isinstance(dest, Point2): await self.do(oracle.move(dest))
+                elif isinstance(dest, Unit): await self.do(oracle.move(dest.position))
+        else:
+            if isinstance(dest, Point2): await self.do(oracle.move(dest))
+            elif isinstance(dest, Unit): await self.do(oracle.move(dest.position))
+
 
     async def investigate_oracle(self):
         if self.units(UnitTypeId.ORACLE).ready.exists:
@@ -470,15 +579,17 @@ class SneakStragy(BotAI):
                 if location.position not in self.enemy_townhall_locations:
                     invest_location = location.position
 
-            if self.scout_oracle.distance_to(invest_location) > 5:
-                await self.do(self.scout_oracle.move(invest_location))
+            if self.scout_oracle.distance_to(invest_location) > 10:
+                await self.oracle_move_with_dodge(self.scout_oracle, invest_location)
             else:
                 if self.known_enemy_structures.of_type({UnitTypeId.HATCHERY, UnitTypeId.LAIR}).closer_than(10, self.scout_oracle).exists:
                     self.enemy_townhall_locations.append(invest_location)
 
     async def attack_oracle(self):
-        # if self.oracle_allow_sneakattack: await self.sneak_attack_oracle()
-        pass
+        for oracle in self.units(UnitTypeId.ORACLE).ready.filter(lambda u: u.health < 15):
+            if self.gather_in_home and oracle.distance_to(self.gather_point) > 8:
+                await self.oracle_move_with_dodge(oracle, self.gather_point)
+
 
     async def attack_stalker(self):
         pass
@@ -537,7 +648,7 @@ class SneakStragy(BotAI):
 
     async def defensive(self):
         if self.defend_home:
-            for force in self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.STALKER}).ready:
+            for force in self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.STALKER, UnitTypeId.ADEPT}).ready:
                 enemy_nearby = set()
                 for townhall in self.townhalls:
                     enemy_near_townhall = set(self.known_enemy_units.closer_than(16, townhall))
@@ -545,15 +656,107 @@ class SneakStragy(BotAI):
                 if len(enemy_nearby) != 0:
                     await self.do(force.attack(random.choice(list(enemy_nearby))))
 
+
     async def all_attack(self):
         if self.all_force_attack and not self.gather_in_home:
-            for force in self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.STALKER}).ready:
-                enemy_near_the_force = self.known_enemy_units.closer_than(5, force)
-                if enemy_near_the_force.exists:
-                    await self.do(force.attack(enemy_near_the_force.random))
-                else:
-                    await self.do(force.attack(self.known_enemy_units.random))
+            await self.leader_attack()
+            await self.zealot_attack()
+            await self.adept_attack()
+            await self.stalker_attack()
+            await self.immortal_attack()
 
+    async def leader_attack(self):
+        if self.attack_leader is not None:
+            closest_enemy = self.known_enemy_units.closest_to(self.attack_leader)
+            if closest_enemy.distance_to(self.attack_leader) < 12:
+                await self.do(self.attack_leader.attack(closest_enemy))
+            else:
+                if self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.ADEPT, UnitTypeId.STALKER}).closer_than(9, self.attack_leader).ready.amount < 6 and \
+                    not self.attack_leader.is_attacking:
+                    await self.do(self.attack_leader.hold_position())
+                elif self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.ADEPT, UnitTypeId.STALKER}).closer_than(9, self.attack_leader).ready.amount >= 6:
+                    target = self.known_enemy_structures.of_type({UnitTypeId.LAIR, UnitTypeId.HATCHERY, UnitTypeId.HIVE}).closest_to(self.attack_leader)
+                    await self.do(self.attack_leader.move(target.position.to2))
+                    # await self.do(self.attack_leader.move(self.enemy_start_locations[0]))
+
+    async def zealot_attack(self):
+        for zealot in self.units(UnitTypeId.ZEALOT).ready:
+            if not zealot.is_attacking:
+                enemy_near_the_force = self.known_enemy_units.closer_than(8, zealot)
+                if enemy_near_the_force.exists:
+                    if enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                        await self.do(zealot.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
+                    else:
+                        await self.do(zealot.attack(enemy_near_the_force.random))
+                else:
+                    if self.attack_leader is not None and zealot != self.attack_leader:
+                        await self.do(zealot.move(self.attack_leader.position))
+            elif zealot.is_attacking:
+                if zealot.order_target is not None and isinstance(zealot.order_target, int):
+                    if zealot.order_target not in {UnitTypeId.ZERGLING, UnitTypeId.ROACH, UnitTypeId.RAVAGER, UnitTypeId.HYDRALISK, UnitTypeId.QUEEN}:
+                        enemy_near_the_force = self.known_enemy_units.closer_than(8, zealot)
+                        if enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                            await self.do(zealot.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
+
+    async def stalker_attack(self):
+        for stalker in self.units(UnitTypeId.STALKER).ready:
+            if not stalker.is_attacking:
+                enemy_near_the_force = self.known_enemy_units.closer_than(8, stalker)
+                if enemy_near_the_force.exists:
+                    if enemy_near_the_force.filter(lambda u: u.is_flying).exists:
+                        await self.do(stalker.attack(enemy_near_the_force.filter(lambda u: u.is_flying).random))
+                    elif enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                        await self.do(stalker.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
+                    else:
+                        await self.do(stalker.attack(enemy_near_the_force.random))
+                else:
+                    if self.attack_leader is not None and stalker != self.attack_leader: await self.do(stalker.move(self.attack_leader.position))
+            elif stalker.is_attacking:
+                if stalker.order_target is not None and isinstance(stalker.order_target, int):
+                    if stalker.order_target not in {UnitTypeId.MUTALISK, UnitTypeId.CORRUPTOR, UnitTypeId.OVERSEER}:
+                        enemy_near_the_force = self.known_enemy_units.closer_than(8, stalker)
+                        if enemy_near_the_force.filter(lambda u: u.is_flying).exists:
+                            await self.do(stalker.attack(enemy_near_the_force.filter(lambda u: u.is_flying).random))
+                    elif stalker.order_target not in {UnitTypeId.ZERGLING, UnitTypeId.ROACH, UnitTypeId.RAVAGER, UnitTypeId.HYDRALISK, UnitTypeId.QUEEN}:
+                        enemy_near_the_force = self.known_enemy_units.closer_than(8, stalker)
+                        if enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                            await self.do(stalker.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
+
+    async def adept_attack(self):
+        for adept in self.units(UnitTypeId.ADEPT).ready:
+            if not adept.is_attacking:
+                enemy_near_the_force = self.known_enemy_units.closer_than(8, adept)
+                if enemy_near_the_force.exists:
+                    if enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                        await self.do(adept.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
+                    else:
+                        await self.do(adept.attack(enemy_near_the_force.random))
+                else:
+                    if self.attack_leader is not None and adept != self.attack_leader: await self.do(adept.move(self.attack_leader.position))
+            elif adept.is_attacking:
+                if adept.order_target is not None and isinstance(adept.order_target, int):
+                    if adept.order_target not in {UnitTypeId.ZERGLING, UnitTypeId.ROACH, UnitTypeId.RAVAGER, UnitTypeId.HYDRALISK, UnitTypeId.QUEEN}:
+                        enemy_near_the_force = self.known_enemy_units.closer_than(8, adept)
+                        if enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                            await self.do(adept.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
+
+    async def immortal_attack(self):
+        for immortal in self.units(UnitTypeId.IMMORTAL).ready:
+            if not immortal.is_attacking:
+                enemy_near_the_force = self.known_enemy_units.closer_than(8, immortal)
+                if enemy_near_the_force.exists:
+                    if enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                        await self.do(immortal.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
+                    else:
+                        await self.do(immortal.attack(enemy_near_the_force.random))
+                else:
+                    if self.attack_leader is not None and immortal != self.attack_leader: await self.do(immortal.move(self.attack_leader.position))
+            elif immortal.is_attacking:
+                if immortal.order_target is not None and isinstance(immortal.order_target, int):
+                    if immortal.order_target not in {UnitTypeId.ZERGLING, UnitTypeId.ROACH, UnitTypeId.RAVAGER, UnitTypeId.HYDRALISK, UnitTypeId.QUEEN}:
+                        enemy_near_the_force = self.known_enemy_units.closer_than(8, immortal)
+                        if enemy_near_the_force.filter(lambda u: u.is_biological).exists:
+                            await self.do(immortal.attack(enemy_near_the_force.filter(lambda u: u.is_biological).random))
 
     async def expand(self):
         if self.townhalls.amount < 2 and self.minerals >= 500 and self.units(UnitTypeId.WARPGATE).ready.exists:
@@ -580,14 +783,70 @@ class SneakStragy(BotAI):
     async def upgrade_charge(self):
         if self.units(UnitTypeId.TWILIGHTCOUNCIL).ready.exists:
             vt = self.units(UnitTypeId.TWILIGHTCOUNCIL).ready.first
-            if self.can_afford(UpgradeId.CHARGE) and AbilityId.RESEARCH_CHARGE in await self.get_available_abilities(vt):
+            if self.can_afford(UpgradeId.CHARGE) and AbilityId.RESEARCH_CHARGE in await self.get_available_abilities(vt) :
                 await self.do(vt.research(UpgradeId.CHARGE))
 
     async def upgrade_blink(self):
         if self.units(UnitTypeId.TWILIGHTCOUNCIL).ready.exists:
             vt = self.units(UnitTypeId.TWILIGHTCOUNCIL).ready.first
-            if self.can_afford(UpgradeId.BLINKTECH) and AbilityId.RESEARCH_BLINK in await self.get_available_abilities(vt):
+            if self.can_afford(UpgradeId.BLINKTECH) and \
+                    AbilityId.RESEARCH_BLINK in await self.get_available_abilities(vt) and \
+                    self.units(UnitTypeId.STALKER).amount >= 5:
                 await self.do(vt.research(UpgradeId.BLINKTECH))
+
+    async def upgrade_resonating_glaives(self):
+        if self.units(UnitTypeId.TWILIGHTCOUNCIL).ready.exists:
+            vt = self.units(UnitTypeId.TWILIGHTCOUNCIL).ready.first
+            if self.minerals > 100 and \
+                    self.vespene > 100 and \
+                    AbilityId.RESEARCH_ADEPTRESONATINGGLAIVES in await self.get_available_abilities(vt):
+                await self.do(vt(AbilityId.RESEARCH_ADEPTRESONATINGGLAIVES))
+
+    async def upgrade_forge(self):
+        if self.units.of_type({UnitTypeId.ZEALOT, UnitTypeId.STALKER, UnitTypeId.ADEPT}).amount > 12:
+            if self.units(UnitTypeId.FORGE).ready.exists:
+                for forge in self.units(UnitTypeId.FORGE).ready:
+                    if forge.is_idle:
+
+                        if AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL1 in await self.get_available_abilities(
+                                forge) and \
+                                self.can_afford(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL1):
+                            await self.do(forge.research(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL1))
+
+                        if AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL2 in await self.get_available_abilities(
+                                forge) and \
+                                self.can_afford(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL2):
+                            await self.do(forge.research(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL2))
+
+                        if AbilityId.FORGERESEARCH_PROTOSSGROUNDWEAPONSLEVEL3 in await self.get_available_abilities(
+                                forge) and \
+                                self.can_afford(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL3):
+                            await self.do(forge.research(UpgradeId.PROTOSSGROUNDWEAPONSLEVEL3))
+
+                        if AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL1 in await self.get_available_abilities(forge) and\
+                                self.can_afford(UpgradeId.PROTOSSGROUNDARMORSLEVEL1):
+                            await self.do(forge.research(UpgradeId.PROTOSSGROUNDARMORSLEVEL1))
+
+                        if AbilityId.FORGERESEARCH_PROTOSSGROUNDARMORLEVEL2 in await self.get_available_abilities(forge) and\
+                                self.can_afford(UpgradeId.PROTOSSGROUNDARMORSLEVEL2):
+                            await self.do(forge.research(UpgradeId.PROTOSSGROUNDARMORSLEVEL2))
+
+                        if AbilityId.FORGERESEARCH_PROTclOSSGROUNDARMORLEVEL3 in await self.get_available_abilities(
+                                forge) and \
+                                self.can_afford(UpgradeId.PROTOSSAIRARMORSLEVEL3):
+                            await self.do(forge.research(UpgradeId.PROTOSSGROUNDARMORSLEVEL3))
+
+                        if AbilityId.FORGERESEARCH_PROTOSSSHIELDSLEVEL1 in await self.get_available_abilities(forge) and\
+                                self.can_afford(UpgradeId.PROTOSSSHIELDSLEVEL1):
+                            await self.do(forge.research(UpgradeId.PROTOSSSHIELDSLEVEL1))
+
+                        if AbilityId.FORGERESEARCH_PROTOSSSHIELDSLEVEL2 in await self.get_available_abilities(forge) and\
+                                self.can_afford(UpgradeId.PROTOSSSHIELDSLEVEL2):
+                            await self.do(forge.research(UpgradeId.PROTOSSSHIELDSLEVEL2))
+
+                        if AbilityId.FORGERESEARCH_PROTOSSSHIELDSLEVEL3 in await self.get_available_abilities(forge) and\
+                                self.can_afford(UpgradeId.PROTOSSSHIELDSLEVEL3):
+                            await self.do(forge.research(UpgradeId.PROTOSSSHIELDSLEVEL3))
 
     async def observer_investigate(self):
         pass
@@ -595,7 +854,7 @@ class SneakStragy(BotAI):
     async def train_force(self):
         await self.train_immortal()
         await self.train_force_in_gate()
-        await self.train_ob()
+        # await self.train_ob()
         
 
 
@@ -604,8 +863,8 @@ class SneakStragy(BotAI):
 def main():
     run_game(
         maps.get("AcropolisLE"),
-        [Bot(Race.Protoss, SneakStragy()), Computer(Race.Zerg, Difficulty.Easy)],
-        realtime = False
+        [Bot(Race.Protoss, OracleBot()), Computer(Race.Zerg, Difficulty.Easy)],
+        realtime = True
     )
 
 if __name__ == "__main__":
